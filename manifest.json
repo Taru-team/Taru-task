@@ -1,0 +1,12 @@
+{
+  "name": "Taru",
+  "short_name": "Taru",
+  "description": "Content planning and sales tracking board for the Taru team.",
+  "start_url": "./index.html",
+  "display": "standalone",
+  "background_color": "#F7F7F5",
+  "theme_color": "#5B47E0",
+  "icons": [
+    { "src": "icon.svg", "sizes": "any", "type": "image/svg+xml", "purpose": "any maskable" }
+  ]
+}
