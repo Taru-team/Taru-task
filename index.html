@@ -887,15 +887,32 @@ function ghApiUrl(){
   return `https://api.github.com/repos/${GH_OWNER}/${GH_REPO}/contents/${DATA_FILE_PATH}`;
 }
 
+function ghRawUrl(){
+  // Not subject to the 60/hr unauthenticated api.github.com rate limit —
+  // safe for guests (and anyone without a token) to hit on every load.
+  return `https://raw.githubusercontent.com/${GH_OWNER}/${GH_REPO}/${GH_BRANCH}/${DATA_FILE_PATH}`;
+}
+
 function scheduleSync(){
   clearTimeout(syncTimer);
   syncTimer = setTimeout(pushToGitHub, 1500);
 }
 
 async function pullFromGitHub(){
+  // No token: read via the raw CDN endpoint. It's public-read, and doesn't
+  // share the tiny unauthenticated api.github.com quota (60 req/hr/IP) that
+  // guests would otherwise exhaust.
+  if(!ghToken){
+    try{
+      const res = await fetch(ghRawUrl() + `?t=${Date.now()}`, { cache:'no-store' });
+      if(res.status===404) return null;
+      if(!res.ok) throw new Error('pull failed');
+      return await res.json();
+    }catch(e){ return null; }
+  }
+  // Token present: use the API (needed to also capture the file `sha` for pushes).
   try{
-    const headers = { 'Accept':'application/vnd.github+json' };
-    if(ghToken) headers['Authorization'] = `token ${ghToken}`;
+    const headers = { 'Accept':'application/vnd.github+json', 'Authorization': `token ${ghToken}` };
     const res = await fetch(ghApiUrl() + `?ref=${GH_BRANCH}`, { headers });
     if(res.status===404){ fileSha=null; return null; }
     if(!res.ok) throw new Error('pull failed');
