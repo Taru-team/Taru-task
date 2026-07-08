@@ -2,6 +2,7 @@
 <html lang="en">
 <head>
 <meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <title>Taru — Content</title>
 <link rel="manifest" href="manifest.json">
 <meta name="theme-color" content="#5B47E0">
@@ -430,8 +431,26 @@
   .toast.show{opacity:1;}
   ::placeholder{color:var(--muted);}
   @media (max-width:480px){
-    body{padding:20px 14px 60px;}
-    .logotype{font-size:24px;}
+    body{padding:16px 12px 60px;}
+    .logotype{font-size:22px;}
+    header{gap:12px;padding-bottom:14px;margin-bottom:20px;}
+    .header-right{width:100%;justify-content:space-between;}
+    .stats{gap:10px;font-size:11px;}
+    .sync-btn{font-size:11px;padding:5px 10px;}
+    .toolbar{gap:8px;margin-bottom:16px;}
+    .toolbar input[type=text]{min-width:0;width:100%;}
+    .toolbar select, .toolbar .switch-group, .toolbar .btn{flex:1 1 auto;}
+    .grid{grid-template-columns:1fr;gap:12px;}
+    .modal{padding:18px;max-width:100%;}
+    .overlay{padding:16px 10px;}
+    .viewer-row{gap:6px;}
+    .viewer-pill, .viewer-add{padding:5px 11px;font-size:11px;}
+    .tab-btn{font-size:14px;margin-right:12px;padding:8px 2px;}
+    .card-title{font-size:15px;}
+    .login-card, .modal h2{font-size:inherit;}
+  }
+  @media (max-width:340px){
+    .stats span:nth-child(3){display:none;}
   }
 </style>
 </head>
@@ -473,7 +492,7 @@
       <div class="logotype">Taru<span class="dot">.</span></div>
       <p class="sub">Content planning board</p>
     </div>
-    <div style="display:flex;align-items:center;gap:14px;">
+    <div class="header-right" style="display:flex;align-items:center;gap:14px;">
       <div class="stats" id="stats"></div>
       <button class="sync-btn" id="syncBtn">
         <span class="sync-dot" id="syncDot"></span>
@@ -778,7 +797,12 @@ function loadAllData(){
     }]
   }];
   dataUpdatedAt = 0;
-  persistLocal();
+  saveLocalRaw();
+}
+
+function saveLocalRaw(){
+  const payload = { board, salesMonths, members, updatedAt: dataUpdatedAt };
+  try{ localStorage.setItem(LOCAL_DATA_KEY, JSON.stringify(payload)); }catch(e){}
 }
 
 function persistLocal(){
