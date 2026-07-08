@@ -47,25 +47,6 @@
       "status": "Not Started",
       "note": "",
       "id": "caq9tlcf2"
-    },
-    {
-      "title": "Retro",
-      "items": [
-        "Joy",
-        "Game",
-        "Else"
-      ],
-      "images": [],
-      "drive": "",
-      "date": "2026-07-08",
-      "assignees": [
-        "Galih",
-        "Bahrul",
-        "Kurniawan"
-      ],
-      "status": "Not Started",
-      "note": "",
-      "id": "cxbs48ewx"
     }
   ],
   "salesMonths": [
@@ -90,5 +71,5 @@
     "Bahrul",
     "Kurniawan"
   ],
-  "updatedAt": 1783524279696
+  "updatedAt": 1783524374548
 }
