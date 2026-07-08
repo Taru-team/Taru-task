@@ -476,7 +476,9 @@
         <button type="button" id="loginAddMemberBtn">Add</button>
       </div>
       <label style="display:block;font-size:12px;color:var(--muted);font-family:'JetBrains Mono',monospace;margin-bottom:6px;">Member code</label>
-      <input type="password" id="loginCode" placeholder="Enter member code" style="width:100%;background:var(--surface2);border:1px solid var(--border);color:var(--text);padding:9px 10px;border-radius:7px;font-family:'Inter',sans-serif;font-size:13px;">
+      <input type="password" id="loginCode" placeholder="Enter member code" style="width:100%;background:var(--surface2);border:1px solid var(--border);color:var(--text);padding:9px 10px;border-radius:7px;font-family:'Inter',sans-serif;font-size:13px;margin-bottom:14px;">
+      <label style="display:block;font-size:12px;color:var(--muted);font-family:'JetBrains Mono',monospace;margin-bottom:6px;">GitHub token <span style="text-transform:none;">(optional — lets this device save changes; you can add it later too)</span></label>
+      <input type="password" id="loginToken" placeholder="ghp_xxxxxxxxxxxx" style="width:100%;background:var(--surface2);border:1px solid var(--border);color:var(--text);padding:9px 10px;border-radius:7px;font-family:'Inter',sans-serif;font-size:13px;">
       <div class="modal-actions">
         <button class="btn ghost" id="loginBackBtn">Back</button>
         <button class="btn" id="loginContinueBtn" disabled>Continue</button>
@@ -494,13 +496,10 @@
     </div>
     <div class="header-right" style="display:flex;align-items:center;gap:14px;">
       <div class="stats" id="stats"></div>
-      <button class="sync-btn" id="syncBtn">
-        <span class="sync-dot" id="syncDot"></span>
-        <span id="syncLabel">Set up sync</span>
-      </button>
     </div>
   </header>
-  <div style="text-align:right;margin:-14px 0 18px;">
+  <div style="text-align:right;margin:-14px 0 18px;display:flex;justify-content:flex-end;gap:14px;">
+    <button id="updateTokenBtn" class="hidden" style="background:none;border:none;color:var(--muted);font-size:12px;cursor:pointer;text-decoration:underline;padding:0;">Update GitHub token</button>
     <button id="switchRoleBtn" style="background:none;border:none;color:var(--muted);font-size:12px;cursor:pointer;text-decoration:underline;padding:0;">Not you? Switch</button>
   </div>
 
@@ -688,31 +687,19 @@
   </div>
 </div>
 
-<div class="overlay" id="syncSettingsOverlay">
-  <div class="modal">
-    <h2>Sync with GitHub</h2>
-    <p style="color:var(--muted);font-size:13px;line-height:1.5;margin:0 0 16px;">Connects Taru to your GitHub repo so everyone's data stays in sync. Fill this in once per device. Use "Copy setup link" to set up other devices instantly.</p>
+<div class="overlay" id="tokenOverlay">
+  <div class="modal" style="max-width:420px;">
+    <h2>GitHub write access</h2>
+    <p style="color:var(--muted);font-size:13px;line-height:1.5;margin:0 0 16px;">Your personal access token lets this device save changes to the shared board. Everyone already sees the latest data automatically — this is only needed to make edits stick.</p>
     <div class="field">
-      <label>GitHub username</label>
-      <input type="text" id="ghUser" placeholder="yourusername">
-    </div>
-    <div class="field">
-      <label>Repo name</label>
-      <input type="text" id="ghRepo" placeholder="taru-app">
-    </div>
-    <div class="field">
-      <label>Branch</label>
-      <input type="text" id="ghBranch" value="main">
-    </div>
-    <div class="field">
-      <label>Personal access token (leave blank to view only)</label>
-      <input type="password" id="ghToken" placeholder="ghp_xxxxxxxxxxxx">
+      <label>Personal access token</label>
+      <input type="password" id="tokenInput" placeholder="ghp_xxxxxxxxxxxx">
     </div>
     <div class="modal-actions">
-      <button class="btn ghost" id="syncCancelBtn">Cancel</button>
-      <button class="btn" id="syncSaveBtn">Save & sync</button>
+      <button class="btn ghost" id="tokenCancelBtn">Cancel</button>
+      <button class="btn" id="tokenSaveBtn">Save</button>
     </div>
-    <button class="upload-btn hidden" id="copyLinkBtn" style="width:100%;margin-top:10px;">Copy setup link for other devices</button>
+    <button class="upload-btn hidden" id="copyLinkBtn" style="width:100%;margin-top:10px;">Copy device link (skip retyping the token elsewhere)</button>
   </div>
 </div>
 
@@ -720,9 +707,15 @@
 
 <script>
 const PREFS_KEY = 'taru_prefs_v1';
-const GH_SETTINGS_KEY = 'taru_gh_settings_v1';
+const GH_TOKEN_KEY = 'taru_gh_token_v1';
 const LOCAL_DATA_KEY = 'taru_data_v1';
 const DATA_FILE_PATH = 'data/taru-data.json';
+
+// ---- Fill these in with your actual repo before deploying ----
+const GH_OWNER = 'YOUR_GITHUB_USERNAME';
+const GH_REPO = 'YOUR_REPO_NAME';
+const GH_BRANCH = 'main';
+// ----------------------------------------------------------------
 
 let board = [];
 let members = [];
@@ -737,7 +730,7 @@ let pendingAssignees = [];
 let pendingSalesImages = [];
 let prefs = { theme: 'light', previewMode: 'image', viewer: 'All', activeTab: 'content' };
 
-let ghSettings = null;
+let ghToken = null;
 let fileSha = null;
 let dirty = false;
 let syncTimer = null;
@@ -814,9 +807,7 @@ function persistLocal(){
 function persistAndSync(){
   persistLocal();
   dirty = true;
-  updateSyncBadge('pending');
-  if(ghSettings && ghSettings.token) scheduleSync();
-  else updateSyncBadge(null);
+  if(ghToken) scheduleSync();
 }
 
 function refreshAllViews(){
@@ -878,16 +869,21 @@ function showViewerAddForm(){
 
 function currentMonth(){ return salesMonths.find(m=>m.id===currentMonthId); }
 
-// ---------- GitHub sync ----------
-function loadGhSettings(){
+// ---------- GitHub sync (repo is fixed; only the write token is per-device) ----------
+function loadGhToken(){
+  try{ ghToken = localStorage.getItem(GH_TOKEN_KEY) || null; }catch(e){ ghToken = null; }
+}
+
+function saveGhToken(token){
+  ghToken = token || null;
   try{
-    const raw = localStorage.getItem(GH_SETTINGS_KEY);
-    ghSettings = raw ? JSON.parse(raw) : null;
-  }catch(e){ ghSettings = null; }
+    if(ghToken) localStorage.setItem(GH_TOKEN_KEY, ghToken);
+    else localStorage.removeItem(GH_TOKEN_KEY);
+  }catch(e){}
 }
 
 function ghApiUrl(){
-  return `https://api.github.com/repos/${ghSettings.user}/${ghSettings.repo}/contents/${DATA_FILE_PATH}`;
+  return `https://api.github.com/repos/${GH_OWNER}/${GH_REPO}/contents/${DATA_FILE_PATH}`;
 }
 
 function scheduleSync(){
@@ -895,47 +891,32 @@ function scheduleSync(){
   syncTimer = setTimeout(pushToGitHub, 1500);
 }
 
-function updateSyncBadge(state){
-  const dot = document.getElementById('syncDot');
-  const label = document.getElementById('syncLabel');
-  if(!dot) return;
-  dot.className = 'sync-dot' + (state ? ' '+state : '');
-  if(!ghSettings){ label.textContent = 'Set up sync'; return; }
-  if(state==='ok') label.textContent = 'Synced';
-  else if(state==='pending') label.textContent = 'Syncing…';
-  else if(state==='err') label.textContent = 'Sync failed';
-  else label.textContent = ghSettings.repo;
-}
-
 async function pullFromGitHub(){
-  if(!ghSettings || !ghSettings.user || !ghSettings.repo) return null;
-  updateSyncBadge('pending');
   try{
     const headers = { 'Accept':'application/vnd.github+json' };
-    if(ghSettings.token) headers['Authorization'] = `token ${ghSettings.token}`;
-    const res = await fetch(ghApiUrl() + `?ref=${ghSettings.branch||'main'}`, { headers });
+    if(ghToken) headers['Authorization'] = `token ${ghToken}`;
+    const res = await fetch(ghApiUrl() + `?ref=${GH_BRANCH}`, { headers });
     if(res.status===404){ fileSha=null; return null; }
     if(!res.ok) throw new Error('pull failed');
     const data = await res.json();
     fileSha = data.sha;
     return JSON.parse(decodeURIComponent(escape(atob(data.content))));
-  }catch(e){ updateSyncBadge('err'); return null; }
+  }catch(e){ return null; }
 }
 
 async function pushToGitHub(){
-  if(!ghSettings || !ghSettings.user || !ghSettings.repo || !ghSettings.token){ updateSyncBadge(null); return; }
-  updateSyncBadge('pending');
+  if(!ghToken) return;
   try{
     const payload = { board, salesMonths, members, updatedAt: dataUpdatedAt };
     const body = {
       message: `Update Taru data ${new Date().toISOString()}`,
       content: btoa(unescape(encodeURIComponent(JSON.stringify(payload, null, 2)))),
-      branch: ghSettings.branch || 'main'
+      branch: GH_BRANCH
     };
     if(fileSha) body.sha = fileSha;
     const res = await fetch(ghApiUrl(), {
       method: 'PUT',
-      headers: { 'Authorization': `token ${ghSettings.token}`, 'Accept':'application/vnd.github+json', 'Content-Type':'application/json' },
+      headers: { 'Authorization': `token ${ghToken}`, 'Accept':'application/vnd.github+json', 'Content-Type':'application/json' },
       body: JSON.stringify(body)
     });
     if(!res.ok){
@@ -945,8 +926,7 @@ async function pushToGitHub(){
     const data = await res.json();
     fileSha = data.content.sha;
     dirty = false;
-    updateSyncBadge('ok');
-  }catch(e){ updateSyncBadge('err'); }
+  }catch(e){ /* will retry on next edit or next reconnect */ }
 }
 
 async function pullThenPush(){
@@ -958,65 +938,30 @@ async function pullThenPush(){
     dataUpdatedAt = remote.updatedAt;
     persistLocal();
     refreshAllViews();
-    updateSyncBadge('ok');
     return;
   }
   await pushToGitHub();
 }
 
-window.addEventListener('online', ()=>{ if(dirty && ghSettings && ghSettings.token) pushToGitHub(); });
+window.addEventListener('online', ()=>{ if(dirty && ghToken) pushToGitHub(); });
 
-function importSyncSettingsFromHash(){
-  if(location.hash.startsWith('#sync=')){
+function importTokenFromHash(){
+  if(location.hash.startsWith('#token=')){
     try{
-      const encoded = location.hash.slice(6);
-      const decoded = JSON.parse(decodeURIComponent(escape(atob(encoded))));
-      if(decoded.user && decoded.repo && decoded.branch){
-        ghSettings = decoded;
-        localStorage.setItem(GH_SETTINGS_KEY, JSON.stringify(ghSettings));
-      }
+      const encoded = location.hash.slice(7);
+      const decoded = decodeURIComponent(escape(atob(encoded)));
+      if(decoded) saveGhToken(decoded);
     }catch(e){ /* ignore malformed hash */ }
     history.replaceState(null, '', location.pathname);
   }
 }
 
-function openSyncSettings(){
-  if(ghSettings){
-    document.getElementById('ghUser').value = ghSettings.user || '';
-    document.getElementById('ghRepo').value = ghSettings.repo || '';
-    document.getElementById('ghBranch').value = ghSettings.branch || 'main';
-    document.getElementById('ghToken').value = ghSettings.token || '';
-    document.getElementById('copyLinkBtn').classList.remove('hidden');
-  }else{
-    document.getElementById('copyLinkBtn').classList.add('hidden');
-  }
-  document.getElementById('syncSettingsOverlay').classList.add('open');
-}
-
-function closeSyncSettings(){
-  document.getElementById('syncSettingsOverlay').classList.remove('open');
-}
-
-function saveSyncSettings(){
-  const user = document.getElementById('ghUser').value.trim();
-  const repo = document.getElementById('ghRepo').value.trim();
-  const branch = document.getElementById('ghBranch').value.trim() || 'main';
-  const token = document.getElementById('ghToken').value.trim();
-  if(!user || !repo){ showToast('Fill in at least username and repo'); return; }
-  ghSettings = { user, repo, branch, token };
-  localStorage.setItem(GH_SETTINGS_KEY, JSON.stringify(ghSettings));
-  document.getElementById('copyLinkBtn').classList.remove('hidden');
-  fileSha = null;
-  closeSyncSettings();
-  pullThenPush();
-}
-
-function copySyncLink(){
-  if(!ghSettings){ showToast('Save sync settings first'); return; }
-  const encoded = btoa(unescape(encodeURIComponent(JSON.stringify(ghSettings))));
-  const link = location.origin + location.pathname + '#sync=' + encoded;
+function copyTokenLink(){
+  if(!ghToken){ showToast('No token to share yet'); return; }
+  const encoded = btoa(unescape(encodeURIComponent(ghToken)));
+  const link = location.origin + location.pathname + '#token=' + encoded;
   navigator.clipboard.writeText(link).then(()=>{
-    showToast('Setup link copied — open it once on the other device');
+    showToast('Device link copied — open it once on your other device');
   }).catch(()=>{
     prompt('Copy this link manually:', link);
   });
@@ -1111,6 +1056,7 @@ function cardHtml(c){
     avatarsHtml = `<div class="avatar-stack">${shown.map(a=>`<span class="avatar" title="${escapeAttr(a)}">${escapeHtml(a.slice(0,2).toUpperCase())}</span>`).join('')}${extra>0?`<span class="avatar" title="+${extra} more">+${extra}</span>`:''}</div>`;
   }
   const dateLabel = formatDate(c.date);
+  const memberLabel = assignees.length ? assignees.join(', ') : '';
   return `
     <div class="card" id="card-${c.id}">
       ${previewHtml(c)}
@@ -1120,6 +1066,7 @@ function cardHtml(c){
           <span class="pill ${statusClass(c.status)}">${c.status}</span>
           <span class="pill">${c.items.length} items</span>
           ${dateLabel ? `<span class="pill">${dateLabel}</span>` : ''}
+          ${memberLabel ? `<span class="pill">${escapeHtml(memberLabel)}</span>` : ''}
         </div>
         <div class="card-footer">
           <a class="drive-link" href="${escapeAttr(c.drive||'#')}" target="_blank" rel="noopener">Open drive</a>
@@ -1687,9 +1634,33 @@ function initLogin(){
     prefs.role = 'member';
     prefs.viewer = loginSelectedMember;
     await savePrefs();
+    const token = document.getElementById('loginToken').value.trim();
+    if(token){ saveGhToken(token); }
     document.getElementById('loginCode').value = '';
+    document.getElementById('loginToken').value = '';
     enterApp();
+    if(ghToken) pushToGitHub();
   });
+}
+
+function openTokenModal(){
+  document.getElementById('tokenInput').value = ghToken || '';
+  document.getElementById('copyLinkBtn').classList.toggle('hidden', !ghToken);
+  document.getElementById('tokenOverlay').classList.add('open');
+}
+
+function closeTokenModal(){
+  document.getElementById('tokenOverlay').classList.remove('open');
+}
+
+function saveTokenModal(){
+  const token = document.getElementById('tokenInput').value.trim();
+  saveGhToken(token);
+  document.getElementById('copyLinkBtn').classList.toggle('hidden', !ghToken);
+  fileSha = null;
+  closeTokenModal();
+  if(ghToken){ pullThenPush(); showToast('Token saved'); }
+  else showToast('Token cleared — this device is view-only now');
 }
 
 function enterApp(){
@@ -1697,32 +1668,32 @@ function enterApp(){
   document.getElementById('appRoot').style.display = 'block';
   document.getElementById('addBtn').style.display = isGuest() ? 'none' : 'inline-block';
   document.getElementById('addMonthBtn').style.display = isGuest() ? 'none' : 'inline-block';
+  document.getElementById('updateTokenBtn').classList.toggle('hidden', isGuest());
   applyPrefs();
   applyTab();
   render();
   renderSalesMonths();
 }
 
-document.getElementById('syncBtn').addEventListener('click', openSyncSettings);
-document.getElementById('syncCancelBtn').addEventListener('click', closeSyncSettings);
-document.getElementById('syncSaveBtn').addEventListener('click', saveSyncSettings);
-document.getElementById('copyLinkBtn').addEventListener('click', copySyncLink);
-document.getElementById('syncSettingsOverlay').addEventListener('click', (e)=>{ if(e.target.id==='syncSettingsOverlay') closeSyncSettings(); });
+document.getElementById('updateTokenBtn').addEventListener('click', openTokenModal);
+document.getElementById('tokenCancelBtn').addEventListener('click', closeTokenModal);
+document.getElementById('tokenSaveBtn').addEventListener('click', saveTokenModal);
+document.getElementById('copyLinkBtn').addEventListener('click', copyTokenLink);
+document.getElementById('tokenOverlay').addEventListener('click', (e)=>{ if(e.target.id==='tokenOverlay') closeTokenModal(); });
 
 (function init(){
-  importSyncSettingsFromHash();
-  loadGhSettings();
+  importTokenFromHash();
+  loadGhToken();
   loadPrefs();
   loadAllData();
   initLogin();
   showSwitchRoleBtn();
-  updateSyncBadge(null);
   if(prefs.role === 'member' || prefs.role === 'guest'){
     enterApp();
   }else{
     goToLoginStep(1);
   }
-  if(ghSettings){ pullThenPush(); }
+  pullThenPush(); // everyone auto-pulls the latest shared data, member or guest
 })();
 
 if('serviceWorker' in navigator){
