@@ -8,7 +8,10 @@
       ],
       "drive": "",
       "date": "2026-07-08",
-      "assignees": [],
+      "assignees": [
+        "Galih",
+        "Bahrul"
+      ],
       "status": "In Progress",
       "note": "",
       "id": "ckjouyaxe"
@@ -36,5 +39,5 @@
     "Bahrul",
     "Kurniawan"
   ],
-  "updatedAt": 1783512683250
+  "updatedAt": 1783512828161
 }
