@@ -477,8 +477,9 @@
       </div>
       <label style="display:block;font-size:12px;color:var(--muted);font-family:'JetBrains Mono',monospace;margin-bottom:6px;">Member code</label>
       <input type="password" id="loginCode" placeholder="Enter member code" style="width:100%;background:var(--surface2);border:1px solid var(--border);color:var(--text);padding:9px 10px;border-radius:7px;font-family:'Inter',sans-serif;font-size:13px;margin-bottom:14px;">
-      <label style="display:block;font-size:12px;color:var(--muted);font-family:'JetBrains Mono',monospace;margin-bottom:6px;">GitHub token <span style="text-transform:none;">(optional — lets this device save changes; you can add it later too)</span></label>
+      <label style="display:block;font-size:12px;color:var(--muted);font-family:'JetBrains Mono',monospace;margin-bottom:6px;">GitHub token <span style="text-transform:none;">(optional — lets this device save changes)</span></label>
       <input type="password" id="loginToken" placeholder="ghp_xxxxxxxxxxxx" style="width:100%;background:var(--surface2);border:1px solid var(--border);color:var(--text);padding:9px 10px;border-radius:7px;font-family:'Inter',sans-serif;font-size:13px;">
+      <p id="loginTokenHint" style="color:var(--muted);font-size:11px;margin:6px 0 0;"></p>
       <div class="modal-actions">
         <button class="btn ghost" id="loginBackBtn">Back</button>
         <button class="btn" id="loginContinueBtn" disabled>Continue</button>
@@ -1593,6 +1594,10 @@ function initLogin(){
     loginSelectedMember = null;
     document.getElementById('loginContinueBtn').disabled = true;
     renderLoginMemberChips();
+    document.getElementById('loginToken').value = ghToken || '';
+    document.getElementById('loginTokenHint').textContent = ghToken
+      ? 'A token is already saved on this device — leave as-is, or paste a new one to replace it.'
+      : 'No token saved on this device yet.';
     goToLoginStep(2);
   });
   document.getElementById('loginGuestBtn').addEventListener('click', async ()=>{
