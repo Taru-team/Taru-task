@@ -272,8 +272,8 @@
     height:130px;
     background:var(--surface2);
   }
-  .preview-images img{width:100%;height:100%;object-fit:cover;display:block;}
-  .preview-images.single{grid-template-columns:1fr;}
+  .preview-images img{width:100%;height:100%;object-fit:contain;background:var(--surface2);display:block;}
+  .preview-images.single{grid-template-columns:1fr;height:180px;}
   .preview-images .more-overlay{
     position:relative;
   }
@@ -596,6 +596,10 @@
         <input type="text" id="fNewMember" placeholder="Add a new member…">
         <button type="button" id="fAddMemberBtn">Add</button>
       </div>
+    </div>
+    <div class="field">
+      <label>Date</label>
+      <input type="date" id="fDate">
     </div>
     <div class="field">
       <label>Status</label>
@@ -1065,6 +1069,13 @@ function previewHtml(c){
   }
 }
 
+function formatDate(dateStr){
+  if(!dateStr) return '';
+  const d = new Date(dateStr + 'T00:00:00');
+  if(isNaN(d.getTime())) return '';
+  return d.toLocaleDateString(undefined, { month:'short', day:'numeric', year:'numeric' });
+}
+
 function cardHtml(c){
   const assignees = c.assignees || [];
   let avatarsHtml;
@@ -1075,6 +1086,7 @@ function cardHtml(c){
     const extra = assignees.length - shown.length;
     avatarsHtml = `<div class="avatar-stack">${shown.map(a=>`<span class="avatar" title="${escapeAttr(a)}">${escapeHtml(a.slice(0,2).toUpperCase())}</span>`).join('')}${extra>0?`<span class="avatar" title="+${extra} more">+${extra}</span>`:''}</div>`;
   }
+  const dateLabel = formatDate(c.date);
   return `
     <div class="card" id="card-${c.id}">
       ${previewHtml(c)}
@@ -1083,6 +1095,7 @@ function cardHtml(c){
         <div class="meta-row">
           <span class="pill ${statusClass(c.status)}">${c.status}</span>
           <span class="pill">${c.items.length} items</span>
+          ${dateLabel ? `<span class="pill">${dateLabel}</span>` : ''}
         </div>
         <div class="card-footer">
           <a class="drive-link" href="${escapeAttr(c.drive||'#')}" target="_blank" rel="noopener">Open drive</a>
@@ -1226,6 +1239,7 @@ function openModal(id){
   document.getElementById('fTitle').value = c ? c.title : '';
   document.getElementById('fItems').value = c ? c.items.join('\n') : '';
   document.getElementById('fDrive').value = c ? c.drive : '';
+  document.getElementById('fDate').value = c ? (c.date || '') : new Date().toISOString().slice(0,10);
   document.getElementById('fStatus').value = c ? c.status : 'Not Started';
   document.getElementById('fNote').value = c ? c.note : '';
   document.getElementById('deleteBtn').style.display = (c && canEdit) ? 'inline-block' : 'none';
@@ -1233,7 +1247,7 @@ function openModal(id){
   document.getElementById('cancelBtn').textContent = canEdit ? 'Cancel' : 'Close';
   document.querySelector('label[for="fImageInput"]').style.display = canEdit ? 'inline-block' : 'none';
   document.getElementById('fNewMember').closest('.add-member-inline').style.display = canEdit ? 'flex' : 'none';
-  ['fTitle','fItems','fDrive','fStatus','fNote'].forEach(id2=>{
+  ['fTitle','fItems','fDrive','fDate','fStatus','fNote'].forEach(id2=>{
     document.getElementById(id2).disabled = !canEdit;
   });
   pendingImages = c && c.images ? [...c.images] : [];
@@ -1336,6 +1350,7 @@ async function saveForm(){
     items,
     images: [...pendingImages],
     drive: document.getElementById('fDrive').value.trim(),
+    date: document.getElementById('fDate').value,
     assignees: [...pendingAssignees],
     status: document.getElementById('fStatus').value,
     note: document.getElementById('fNote').value.trim(),
