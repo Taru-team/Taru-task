@@ -922,27 +922,26 @@ function scheduleSync(){
 }
 
 async function pullFromGitHub(){
-  // No token: read via the raw CDN endpoint. It's public-read, and doesn't
-  // share the tiny unauthenticated api.github.com quota (60 req/hr/IP) that
-  // guests would otherwise exhaust.
+  // Returns { status:'ok', data } | { status:'notfound' } | { status:'error' }.
+  // status stays separate from data so a network/rate-limit failure can never
+  // be mistaken for "the repo is genuinely empty" further up the call chain.
   if(!ghToken){
     try{
       const res = await fetch(ghRawUrl() + `?t=${Date.now()}`, { cache:'no-store' });
-      if(res.status===404) return null;
-      if(!res.ok) throw new Error('pull failed');
-      return await res.json();
-    }catch(e){ return null; }
+      if(res.status===404) return { status:'notfound' };
+      if(!res.ok) return { status:'error' };
+      return { status:'ok', data: await res.json() };
+    }catch(e){ return { status:'error' }; }
   }
-  // Token present: use the API (needed to also capture the file `sha` for pushes).
   try{
     const headers = { 'Accept':'application/vnd.github+json', 'Authorization': `token ${ghToken}` };
     const res = await fetch(ghApiUrl() + `?ref=${GH_BRANCH}`, { headers });
-    if(res.status===404){ fileSha=null; return null; }
-    if(!res.ok) throw new Error('pull failed');
+    if(res.status===404){ fileSha=null; return { status:'notfound' }; }
+    if(!res.ok) return { status:'error' };
     const data = await res.json();
     fileSha = data.sha;
-    return JSON.parse(decodeURIComponent(escape(atob(data.content))));
-  }catch(e){ return null; }
+    return { status:'ok', data: JSON.parse(decodeURIComponent(escape(atob(data.content)))) };
+  }catch(e){ return { status:'error' }; }
 }
 
 async function pushToGitHub(){
@@ -976,7 +975,17 @@ async function pushToGitHub(){
 
 async function pullThenPush(){
   if(ghToken) setSyncState('syncing');
-  const remote = await pullFromGitHub();
+  const result = await pullFromGitHub();
+
+  if(result.status === 'error'){
+    // Pull failed (network hiccup, rate limit, etc.) — we do NOT know the
+    // real state of the repo, so we must not push. Pushing here is exactly
+    // what previously let an empty/stale local cache overwrite real data.
+    if(ghToken) setSyncState('error');
+    return;
+  }
+
+  const remote = result.data; // present only when status === 'ok'
   if(remote && typeof remote.updatedAt === 'number' && remote.updatedAt > dataUpdatedAt){
     board = remote.board || [];
     salesMonths = remote.salesMonths || [];
@@ -987,6 +996,10 @@ async function pullThenPush(){
     if(ghToken) setSyncState('synced');
     return;
   }
+
+  // Safe to push: either the file genuinely doesn't exist yet (status
+  // 'notfound', nothing to lose), or the pull succeeded and confirmed our
+  // local copy is already the newer one (a real, timestamped edit).
   if(ghToken) await pushToGitHub();
 }
 
