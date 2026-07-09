@@ -1,0 +1,28 @@
+{
+  "categoryOrder": [
+    "c3nyjw5fm"
+  ],
+  "salesMonths": [
+    {
+      "id": "c0b6yuwy5",
+      "label": "February",
+      "marketplaces": [
+        {
+          "id": "cycubl2sg",
+          "name": "Iconscout",
+          "totalItems": 31,
+          "totalSales": 14.72,
+          "status": "Active",
+          "note": "",
+          "images": []
+        }
+      ]
+    }
+  ],
+  "members": [
+    "Galih",
+    "Bahrul",
+    "Kurniawan"
+  ],
+  "updatedAt": 1783593278812
+}
