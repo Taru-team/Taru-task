@@ -1,0 +1,26 @@
+{
+  "board": [],
+  "salesMonths": [
+    {
+      "id": "cyfbzmxma",
+      "label": "February",
+      "marketplaces": [
+        {
+          "id": "c3luc1o3x",
+          "name": "Iconscout",
+          "totalItems": 31,
+          "totalSales": 14.72,
+          "status": "Active",
+          "note": "",
+          "images": []
+        }
+      ]
+    }
+  ],
+  "members": [
+    "Galih",
+    "Bahrul",
+    "Kurniawan"
+  ],
+  "updatedAt": 0
+}
