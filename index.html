@@ -500,7 +500,10 @@
     </div>
   </header>
   <div style="text-align:right;margin:-14px 0 18px;display:flex;justify-content:flex-end;gap:14px;">
-    <button id="updateTokenBtn" class="hidden" style="background:none;border:none;color:var(--muted);font-size:12px;cursor:pointer;text-decoration:underline;padding:0;">Update GitHub token</button>
+    <button id="updateTokenBtn" class="sync-btn hidden">
+      <span class="sync-dot" id="syncDot"></span>
+      <span id="syncLabel">Set up sync</span>
+    </button>
     <button id="switchRoleBtn" style="background:none;border:none;color:var(--muted);font-size:12px;cursor:pointer;text-decoration:underline;padding:0;">Not you? Switch</button>
   </div>
 
@@ -735,6 +738,7 @@ let ghToken = null;
 let fileSha = null;
 let dirty = false;
 let syncTimer = null;
+let syncState = 'none'; // 'none' | 'syncing' | 'synced' | 'error'
 
 const DEFAULT_MEMBERS = ["Galih","Bahrul","Kurniawan"];
 const MEMBER_CODE = "Taru123";
@@ -881,6 +885,24 @@ function saveGhToken(token){
     if(ghToken) localStorage.setItem(GH_TOKEN_KEY, ghToken);
     else localStorage.removeItem(GH_TOKEN_KEY);
   }catch(e){}
+  setSyncState(ghToken ? 'syncing' : 'none');
+}
+
+function setSyncState(state){
+  syncState = state;
+  renderSyncStatus();
+}
+
+function renderSyncStatus(){
+  const dot = document.getElementById('syncDot');
+  const label = document.getElementById('syncLabel');
+  if(!dot || !label) return;
+  dot.className = 'sync-dot' + (syncState==='syncing' ? ' pending' : syncState==='synced' ? ' ok' : syncState==='error' ? ' err' : '');
+  label.textContent =
+    syncState==='syncing' ? 'Syncing…' :
+    syncState==='synced'  ? 'Synced' :
+    syncState==='error'   ? 'Sync failed — tap to retry' :
+    'Set up sync';
 }
 
 function ghApiUrl(){
@@ -894,6 +916,7 @@ function ghRawUrl(){
 }
 
 function scheduleSync(){
+  setSyncState('syncing');
   clearTimeout(syncTimer);
   syncTimer = setTimeout(pushToGitHub, 1500);
 }
@@ -924,6 +947,7 @@ async function pullFromGitHub(){
 
 async function pushToGitHub(){
   if(!ghToken) return;
+  setSyncState('syncing');
   try{
     const payload = { board, salesMonths, members, updatedAt: dataUpdatedAt };
     const body = {
@@ -944,10 +968,14 @@ async function pushToGitHub(){
     const data = await res.json();
     fileSha = data.content.sha;
     dirty = false;
-  }catch(e){ /* will retry on next edit or next reconnect */ }
+    setSyncState('synced');
+  }catch(e){
+    setSyncState('error'); /* will retry on next edit or next reconnect */
+  }
 }
 
 async function pullThenPush(){
+  if(ghToken) setSyncState('syncing');
   const remote = await pullFromGitHub();
   if(remote && typeof remote.updatedAt === 'number' && remote.updatedAt > dataUpdatedAt){
     board = remote.board || [];
@@ -956,9 +984,10 @@ async function pullThenPush(){
     dataUpdatedAt = remote.updatedAt;
     persistLocal();
     refreshAllViews();
+    if(ghToken) setSyncState('synced');
     return;
   }
-  await pushToGitHub();
+  if(ghToken) await pushToGitHub();
 }
 
 window.addEventListener('online', ()=>{ if(dirty && ghToken) pushToGitHub(); });
@@ -1691,6 +1720,7 @@ function enterApp(){
   document.getElementById('addBtn').style.display = isGuest() ? 'none' : 'inline-block';
   document.getElementById('addMonthBtn').style.display = isGuest() ? 'none' : 'inline-block';
   document.getElementById('updateTokenBtn').classList.toggle('hidden', isGuest());
+  setSyncState(ghToken ? syncState : 'none');
   applyPrefs();
   applyTab();
   render();
