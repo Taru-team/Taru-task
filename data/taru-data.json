@@ -25,7 +25,11 @@
       ],
       "drive": "",
       "date": "2026-07-09",
-      "assignees": [],
+      "assignees": [
+        "Galih",
+        "Bahrul",
+        "Kurniawan"
+      ],
       "status": "Not Started",
       "note": "",
       "id": "ctoz9tgkw"
@@ -53,5 +57,5 @@
     "Bahrul",
     "Kurniawan"
   ],
-  "updatedAt": 1783564713365
+  "updatedAt": 1783564717901
 }
