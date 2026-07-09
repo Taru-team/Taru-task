@@ -735,10 +735,18 @@ let pendingSalesImages = [];
 let prefs = { theme: 'light', previewMode: 'image', viewer: 'All', activeTab: 'content' };
 
 let ghToken = null;
-let fileSha = null;
+let indexSha = null;          // sha of data/index.json
+let categorySha = {};         // { categoryId: sha } for data/categories/<id>.json
+let indexUpdatedAt = 0;       // last known updatedAt of the remote index (salesMonths/members/order)
+let dirtyScopes = new Set();  // 'index' and/or category ids waiting to be pushed
+let pendingDeletes = new Set(); // category ids waiting to be deleted remotely
 let dirty = false;
 let syncTimer = null;
 let syncState = 'none'; // 'none' | 'syncing' | 'synced' | 'error'
+
+const INDEX_FILE_PATH = 'data/index.json';
+const CATEGORIES_DIR = 'data/categories';
+function categoryFilePath(id){ return `${CATEGORIES_DIR}/${id}.json`; }
 
 const DEFAULT_MEMBERS = ["Galih","Bahrul","Kurniawan"];
 const MEMBER_CODE = "Taru123";
@@ -779,6 +787,7 @@ function loadAllData(){
       salesMonths = parsed.salesMonths || [];
       members = (parsed.members && parsed.members.length) ? parsed.members : [...DEFAULT_MEMBERS];
       dataUpdatedAt = parsed.updatedAt || 0;
+      indexUpdatedAt = dataUpdatedAt;
       return;
     }
   }catch(e){}
@@ -809,9 +818,10 @@ function persistLocal(){
   try{ localStorage.setItem(LOCAL_DATA_KEY, JSON.stringify(payload)); }catch(e){}
 }
 
-function persistAndSync(){
+function persistAndSync(scopes){
   persistLocal();
   dirty = true;
+  (Array.isArray(scopes) ? scopes : [scopes]).forEach(s => { if(s) dirtyScopes.add(s); });
   if(ghToken) scheduleSync();
 }
 
@@ -827,7 +837,7 @@ async function addMember(name){
   if(!name) return false;
   if(members.some(m=>m.toLowerCase()===name.toLowerCase())) return false;
   members.push(name);
-  persistAndSync();
+  persistAndSync('index');
   return true;
 }
 
@@ -905,77 +915,205 @@ function renderSyncStatus(){
     'Set up sync';
 }
 
-function ghApiUrl(){
-  return `https://api.github.com/repos/${GH_OWNER}/${GH_REPO}/contents/${DATA_FILE_PATH}`;
+function ghApiUrlFor(path){
+  return `https://api.github.com/repos/${GH_OWNER}/${GH_REPO}/contents/${path}`;
 }
 
-function ghRawUrl(){
+function ghRawUrlFor(path){
   // Not subject to the 60/hr unauthenticated api.github.com rate limit —
   // safe for guests (and anyone without a token) to hit on every load.
-  return `https://raw.githubusercontent.com/${GH_OWNER}/${GH_REPO}/${GH_BRANCH}/${DATA_FILE_PATH}`;
+  return `https://raw.githubusercontent.com/${GH_OWNER}/${GH_REPO}/${GH_BRANCH}/${path}`;
+}
+
+// ---- generic single-file GET/PUT/DELETE against the repo ----
+
+async function ghGetFile(path){
+  // Returns { status:'ok', data, sha } | { status:'notfound' } | { status:'error' }.
+  // status stays separate from data so a network/rate-limit failure can never
+  // be mistaken for "this file is genuinely empty/missing" further up the chain.
+  if(!ghToken){
+    try{
+      const res = await fetch(ghRawUrlFor(path) + `?t=${Date.now()}`, { cache:'no-store' });
+      if(res.status===404) return { status:'notfound' };
+      if(!res.ok) return { status:'error' };
+      return { status:'ok', data: await res.json(), sha:null };
+    }catch(e){ return { status:'error' }; }
+  }
+  try{
+    const headers = { 'Accept':'application/vnd.github+json', 'Authorization': `token ${ghToken}` };
+    const res = await fetch(ghApiUrlFor(path) + `?ref=${GH_BRANCH}`, { headers });
+    if(res.status===404) return { status:'notfound' };
+    if(!res.ok) return { status:'error' };
+    const d = await res.json();
+    return { status:'ok', data: JSON.parse(decodeURIComponent(escape(atob(d.content)))), sha:d.sha };
+  }catch(e){ return { status:'error' }; }
+}
+
+async function ghPutFile(path, obj, knownSha){
+  if(!ghToken) return { ok:false };
+  try{
+    const body = {
+      message: `Update ${path} ${new Date().toISOString()}`,
+      content: btoa(unescape(encodeURIComponent(JSON.stringify(obj, null, 2)))),
+      branch: GH_BRANCH
+    };
+    if(knownSha) body.sha = knownSha;
+    const res = await fetch(ghApiUrlFor(path), {
+      method: 'PUT',
+      headers: { 'Authorization': `token ${ghToken}`, 'Accept':'application/vnd.github+json', 'Content-Type':'application/json' },
+      body: JSON.stringify(body)
+    });
+    if(res.status===409) return { ok:false, conflict:true };
+    if(!res.ok) return { ok:false };
+    const data = await res.json();
+    return { ok:true, sha:data.content.sha };
+  }catch(e){ return { ok:false }; }
+}
+
+async function ghDeleteFile(path, knownSha){
+  if(!ghToken) return { ok:false };
+  if(!knownSha) return { ok:true }; // never existed remotely (created+deleted before first sync) — nothing to delete
+  try{
+    const res = await fetch(ghApiUrlFor(path), {
+      method: 'DELETE',
+      headers: { 'Authorization': `token ${ghToken}`, 'Accept':'application/vnd.github+json', 'Content-Type':'application/json' },
+      body: JSON.stringify({ message:`Delete ${path} ${new Date().toISOString()}`, sha:knownSha, branch:GH_BRANCH })
+    });
+    if(res.status===409 || res.status===404) return { ok:true }; // already gone, or someone else changed it — either way it's not there
+    if(!res.ok) return { ok:false };
+    return { ok:true };
+  }catch(e){ return { ok:false }; }
+}
+
+// ---- index.json (categoryOrder + salesMonths + members) ----
+
+async function pullIndex(){
+  const result = await ghGetFile(INDEX_FILE_PATH);
+  if(result.status !== 'notfound') return result;
+  // New split-file index doesn't exist yet — see if the old single-file
+  // format is still there so we can migrate instead of assuming "empty".
+  return await pullLegacyAsIndex();
+}
+
+async function pullLegacyAsIndex(){
+  const legacyResult = await ghGetFile(DATA_FILE_PATH);
+  if(legacyResult.status !== 'ok') return legacyResult; // 'notfound' (brand-new repo) or 'error', pass straight through
+  const legacy = legacyResult.data;
+  return {
+    status: 'ok',
+    sha: null,
+    data: {
+      categoryOrder: (legacy.board || []).map(c => c.id),
+      salesMonths: legacy.salesMonths || [],
+      members: legacy.members || [],
+      updatedAt: legacy.updatedAt || 0
+    },
+    // legacy file already embeds full category objects — no per-category fetches needed
+    legacyBoard: (legacy.board || []).map(c => ({ ...c, updatedAt: c.updatedAt || legacy.updatedAt || 0 }))
+  };
+}
+
+async function pushIndexFile(){
+  const payload = { categoryOrder: board.map(c=>c.id), salesMonths, members, updatedAt: Date.now() };
+  let res = await ghPutFile(INDEX_FILE_PATH, payload, indexSha);
+  if(res.conflict){
+    const fresh = await ghGetFile(INDEX_FILE_PATH);
+    if(fresh.status === 'ok') indexSha = fresh.sha;
+    res = await ghPutFile(INDEX_FILE_PATH, payload, indexSha);
+  }
+  if(res.ok){ indexSha = res.sha; indexUpdatedAt = payload.updatedAt; }
+  return res.ok;
+}
+
+// ---- data/categories/<id>.json (one file per category) ----
+
+async function pullCategory(id){
+  return await ghGetFile(categoryFilePath(id));
+}
+
+async function pushCategoryFile(cat){
+  let res = await ghPutFile(categoryFilePath(cat.id), cat, categorySha[cat.id]);
+  if(res.conflict){
+    const fresh = await ghGetFile(categoryFilePath(cat.id));
+    if(fresh.status === 'ok') categorySha[cat.id] = fresh.sha;
+    res = await ghPutFile(categoryFilePath(cat.id), cat, categorySha[cat.id]);
+  }
+  if(res.ok) categorySha[cat.id] = res.sha;
+  return res.ok;
+}
+
+async function deleteCategoryRemote(id){
+  const res = await ghDeleteFile(categoryFilePath(id), categorySha[id]);
+  if(res.ok) delete categorySha[id];
+  return res.ok;
+}
+
+// ---- orchestration ----
+
+async function pullAll(){
+  const idxResult = await pullIndex();
+  if(idxResult.status === 'error') return { status:'error' };
+  if(idxResult.status === 'notfound') return { status:'notfound' };
+
+  indexSha = idxResult.sha;
+  const idx = idxResult.data;
+
+  if(idxResult.legacyBoard){
+    // migration path: everything already came embedded in the old file
+    return { status:'ok', index: idx, categories: idxResult.legacyBoard };
+  }
+
+  const order = idx.categoryOrder || [];
+  const results = await Promise.all(order.map(id => pullCategory(id)));
+  const cats = [];
+  let anyError = false;
+  results.forEach((r, i) => {
+    const id = order[i];
+    if(r.status === 'ok'){ categorySha[id] = r.sha; cats.push(r.data); }
+    else if(r.status === 'error'){ anyError = true; }
+    // 'notfound' — listed in the index but the file's missing; skip it rather than block the whole pull
+  });
+  return { status: anyError ? 'partial' : 'ok', index: idx, categories: cats };
 }
 
 function scheduleSync(){
   setSyncState('syncing');
   clearTimeout(syncTimer);
-  syncTimer = setTimeout(pushToGitHub, 1500);
+  syncTimer = setTimeout(flushSync, 1500);
 }
 
-async function pullFromGitHub(){
-  // Returns { status:'ok', data } | { status:'notfound' } | { status:'error' }.
-  // status stays separate from data so a network/rate-limit failure can never
-  // be mistaken for "the repo is genuinely empty" further up the call chain.
-  if(!ghToken){
-    try{
-      const res = await fetch(ghRawUrl() + `?t=${Date.now()}`, { cache:'no-store' });
-      if(res.status===404) return { status:'notfound' };
-      if(!res.ok) return { status:'error' };
-      return { status:'ok', data: await res.json() };
-    }catch(e){ return { status:'error' }; }
-  }
-  try{
-    const headers = { 'Accept':'application/vnd.github+json', 'Authorization': `token ${ghToken}` };
-    const res = await fetch(ghApiUrl() + `?ref=${GH_BRANCH}`, { headers });
-    if(res.status===404){ fileSha=null; return { status:'notfound' }; }
-    if(!res.ok) return { status:'error' };
-    const data = await res.json();
-    fileSha = data.sha;
-    return { status:'ok', data: JSON.parse(decodeURIComponent(escape(atob(data.content)))) };
-  }catch(e){ return { status:'error' }; }
-}
-
-async function pushToGitHub(){
+async function flushSync(){
   if(!ghToken) return;
+  if(dirtyScopes.size===0 && pendingDeletes.size===0) return;
   setSyncState('syncing');
-  try{
-    const payload = { board, salesMonths, members, updatedAt: dataUpdatedAt };
-    const body = {
-      message: `Update Taru data ${new Date().toISOString()}`,
-      content: btoa(unescape(encodeURIComponent(JSON.stringify(payload, null, 2)))),
-      branch: GH_BRANCH
-    };
-    if(fileSha) body.sha = fileSha;
-    const res = await fetch(ghApiUrl(), {
-      method: 'PUT',
-      headers: { 'Authorization': `token ${ghToken}`, 'Accept':'application/vnd.github+json', 'Content-Type':'application/json' },
-      body: JSON.stringify(body)
-    });
-    if(!res.ok){
-      if(res.status===409){ await pullThenPush(); return; }
-      throw new Error('push failed');
-    }
-    const data = await res.json();
-    fileSha = data.content.sha;
-    dirty = false;
-    setSyncState('synced');
-  }catch(e){
-    setSyncState('error'); /* will retry on next edit or next reconnect */
+  let anyError = false;
+
+  for(const id of [...pendingDeletes]){
+    const ok = await deleteCategoryRemote(id);
+    if(ok) pendingDeletes.delete(id); else anyError = true;
+    dirtyScopes.delete(id); // no point writing content for a file we're deleting
   }
+
+  for(const id of [...dirtyScopes]){
+    if(id === 'index') continue;
+    const cat = board.find(c => c.id === id);
+    if(!cat){ dirtyScopes.delete(id); continue; } // no longer exists locally, nothing to push
+    const ok = await pushCategoryFile(cat);
+    if(ok) dirtyScopes.delete(id); else anyError = true;
+  }
+
+  if(dirtyScopes.has('index')){
+    const ok = await pushIndexFile();
+    if(ok) dirtyScopes.delete('index'); else anyError = true;
+  }
+
+  dirty = dirtyScopes.size > 0 || pendingDeletes.size > 0;
+  setSyncState(anyError ? 'error' : 'synced');
 }
 
 async function pullThenPush(){
   if(ghToken) setSyncState('syncing');
-  const result = await pullFromGitHub();
+  const result = await pullAll();
 
   if(result.status === 'error'){
     // Pull failed (network hiccup, rate limit, etc.) — we do NOT know the
@@ -985,25 +1123,39 @@ async function pullThenPush(){
     return;
   }
 
-  const remote = result.data; // present only when status === 'ok'
-  if(remote && typeof remote.updatedAt === 'number' && remote.updatedAt > dataUpdatedAt){
-    board = remote.board || [];
-    salesMonths = remote.salesMonths || [];
-    members = (remote.members && remote.members.length) ? remote.members : members;
-    dataUpdatedAt = remote.updatedAt;
-    persistLocal();
-    refreshAllViews();
-    if(ghToken) setSyncState('synced');
+  if(result.status === 'notfound'){
+    // Brand-new repo, nothing saved yet anywhere — safe to push whatever
+    // we have locally to initialize both files for the first time.
+    if(ghToken){
+      dirtyScopes.add('index');
+      board.forEach(c => dirtyScopes.add(c.id));
+      await flushSync();
+    }
     return;
   }
 
-  // Safe to push: either the file genuinely doesn't exist yet (status
-  // 'notfound', nothing to lose), or the pull succeeded and confirmed our
-  // local copy is already the newer one (a real, timestamped edit).
-  if(ghToken) await pushToGitHub();
+  const idx = result.index;
+  if(typeof idx.updatedAt === 'number' && idx.updatedAt > indexUpdatedAt){
+    salesMonths = idx.salesMonths || [];
+    members = (idx.members && idx.members.length) ? idx.members : members;
+    indexUpdatedAt = idx.updatedAt;
+  }
+
+  if(result.status === 'ok'){
+    // Every category file fetched successfully — safe to fully replace the
+    // board with what's on GitHub, in the index's order.
+    board = idx.categoryOrder.map(id => result.categories.find(c => c.id === id)).filter(Boolean);
+  }
+  // If 'partial' (some category file failed to fetch), leave board as-is —
+  // never drop a category locally just because one file read failed.
+
+  dataUpdatedAt = Date.now();
+  persistLocal();
+  refreshAllViews();
+  if(ghToken) setSyncState(result.status === 'ok' ? 'synced' : 'error');
 }
 
-window.addEventListener('online', ()=>{ if(dirty && ghToken) pushToGitHub(); });
+window.addEventListener('online', ()=>{ if(dirty && ghToken) flushSync(); });
 
 function importTokenFromHash(){
   if(location.hash.startsWith('#token=')){
@@ -1389,13 +1541,14 @@ async function saveForm(){
   let cat;
   if(editingId){
     const idx = board.findIndex(x=>x.id===editingId);
-    cat = {...board[idx], ...data};
+    cat = {...board[idx], ...data, updatedAt: Date.now()};
     board[idx] = cat;
+    persistAndSync(cat.id); // only this category's file changed — index/order untouched
   }else{
-    cat = {...data, id: uid()};
+    cat = {...data, id: uid(), updatedAt: Date.now()};
     board.push(cat);
+    persistAndSync([cat.id, 'index']); // new category — its file AND the order in index.json both changed
   }
-  persistAndSync();
   closeModal();
   render();
   showToast('Saved');
@@ -1403,8 +1556,11 @@ async function saveForm(){
 
 async function deleteEntry(){
   if(isGuest() || !editingId) return;
-  board = board.filter(x=>x.id!==editingId);
-  persistAndSync();
+  const id = editingId;
+  board = board.filter(x=>x.id!==id);
+  pendingDeletes.add(id);
+  dirtyScopes.delete(id); // no point pushing content for a file we're about to delete
+  persistAndSync('index'); // categoryOrder changed
   closeModal();
   render();
   showToast('Deleted');
@@ -1493,7 +1649,7 @@ async function saveSalesForm(){
   }else{
     m.marketplaces.push({...data, id: uid()});
   }
-  persistAndSync();
+  persistAndSync('index');
   closeSalesModal();
   renderMarketGrid();
   renderSalesMonths();
@@ -1505,7 +1661,7 @@ async function deleteSalesEntryHandler(){
   const m = currentMonth();
   if(!m) return;
   m.marketplaces = m.marketplaces.filter(x=>x.id!==editingSalesId);
-  persistAndSync();
+  persistAndSync('index');
   closeSalesModal();
   renderMarketGrid();
   renderSalesMonths();
@@ -1544,7 +1700,7 @@ async function saveMonthForm(){
     month = {id: uid(), label, marketplaces: []};
     salesMonths.push(month);
   }
-  persistAndSync();
+  persistAndSync('index');
   closeMonthModal();
   renderSalesMonths();
   showToast('Saved');
@@ -1554,7 +1710,7 @@ async function deleteMonthHandler(){
   if(isGuest() || !editingMonthId) return;
   const wasCurrent = currentMonthId === editingMonthId;
   salesMonths = salesMonths.filter(x=>x.id!==editingMonthId);
-  persistAndSync();
+  persistAndSync('index');
   closeMonthModal();
   if(wasCurrent) backToMonths();
   renderSalesMonths();
@@ -1703,7 +1859,7 @@ function initLogin(){
     document.getElementById('loginCode').value = '';
     document.getElementById('loginToken').value = '';
     enterApp();
-    if(ghToken) pushToGitHub();
+    if(ghToken) pullThenPush();
   });
 }
 
@@ -1721,7 +1877,8 @@ function saveTokenModal(){
   const token = document.getElementById('tokenInput').value.trim();
   saveGhToken(token);
   document.getElementById('copyLinkBtn').classList.toggle('hidden', !ghToken);
-  fileSha = null;
+  indexSha = null;
+  categorySha = {};
   closeTokenModal();
   if(ghToken){ pullThenPush(); showToast('Token saved'); }
   else showToast('Token cleared — this device is view-only now');
