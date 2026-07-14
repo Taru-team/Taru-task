@@ -1,4 +1,4 @@
-const CACHE = 'taru-v1';
+const CACHE = 'taru-v2';
 const ASSETS = ['./index.html', './manifest.json', './icon.svg'];
 
 self.addEventListener('install', e => {
@@ -15,19 +15,18 @@ self.addEventListener('activate', e => {
 
 self.addEventListener('fetch', e => {
   const url = new URL(e.request.url);
-  // Never cache GitHub API calls - always go to network for sync data
-  if (url.hostname === 'api.github.com') return;
+  // Never let the service worker touch GitHub calls - always go straight to network
+  if (url.hostname === 'api.github.com' || url.hostname === 'raw.githubusercontent.com') return;
 
+  // Network-first: always try to get the latest version when online.
+  // Only fall back to the cached copy if the network request fails (offline).
   e.respondWith(
-    caches.match(e.request).then(cached => {
-      const network = fetch(e.request).then(res => {
-        if (res.ok && url.origin === location.origin) {
-          const clone = res.clone();
-          caches.open(CACHE).then(c => c.put(e.request, clone));
-        }
-        return res;
-      }).catch(() => cached);
-      return cached || network;
-    })
+    fetch(e.request).then(res => {
+      if (res.ok && url.origin === location.origin) {
+        const clone = res.clone();
+        caches.open(CACHE).then(c => c.put(e.request, clone));
+      }
+      return res;
+    }).catch(() => caches.match(e.request))
   );
 });
