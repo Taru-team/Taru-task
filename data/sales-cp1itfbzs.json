@@ -1,0 +1,16 @@
+{
+  "id": "cp1itfbzs",
+  "label": "February",
+  "updatedAt": 0,
+  "marketplaces": [
+    {
+      "id": "ceg95hor0",
+      "name": "Iconscout",
+      "totalItems": 31,
+      "totalSales": 14.72,
+      "status": "Active",
+      "note": "",
+      "images": []
+    }
+  ]
+}
